@@ -16,11 +16,11 @@ The tape measure is simulated (`src/lib/tape.ts`), so you don't need any hardwar
 
 ## Setup
 
-You need **Node 22.13 or newer** (the API uses the built-in `node:sqlite`) and **Yarn 1**. You
+You need **Node 22.13 or newer** (tested with 22.23.4; the API uses built-in `node:sqlite`) and **Yarn 1.22**. You
 don't need Docker, Xcode or Android Studio.
 
 ```bash
-yarn
+yarn install --frozen-lockfile
 yarn dev
 ```
 
@@ -46,31 +46,129 @@ browser works without any of this.
 | ---------------- | ---------------------------------- |
 | `yarn dev:api`   | API only (restarts on change)      |
 | `yarn dev:app`   | Expo dev server only               |
-| `yarn test`      | Vitest (there are no tests yet)    |
+| `yarn test`      | API integration and client lifecycle tests |
 | `yarn typecheck` | TypeScript for the app and the API |
-| `yarn lint`      | ESLint                             |
+| `yarn lint`      | ESLint for app, API, shared code and scripts |
 
 To add a dependency to the app, use `npx expo install <package>` so you get a version that matches
 the Expo SDK.
 
 ### Users and data
 
-There's no login. Three users are seeded, each with a fixed bearer token:
+Sign in with any of these **public demo credentials** (names are case-insensitive):
 
-| User  | Token            | Projects                                                     |
-| ----- | ---------------- | ------------------------------------------------------------ |
-| Alex  | `alex-7f3c2a91`  | Hendricks Kitchen Remodel, Unit 4B Flooring, Garage Shelving |
-| Priya | `priya-2d9e5b07` | Hendricks Kitchen Remodel (as a subcontractor)               |
-| Sam   | `sam-4b8e10d6`   | Maple St Deck                                                |
+| Name | Password | Projects |
+| --- | --- | --- |
+| Alex | `kerf-alex-demo` | Hendricks Kitchen Remodel, Unit 4B Flooring, Garage Shelving |
+| Priya | `kerf-priya-demo` | Hendricks Kitchen Remodel, shared with Alex |
+| Sam | `kerf-sam-demo` | Maple St Deck, isolated from Alex and Priya |
 
-The app always acts as Alex. You can call the API directly, for example:
+Use a private browser window or a second device for a different account. Your name appears on
+Projects, the dashboard and Settings. **Settings → Sign out** revokes that login on the server;
+other devices stay signed in. Sessions survive app/API restarts and expire after 30 days. Invalid
+or expired credentials return you to sign-in. If offline at startup, an unexpired cached identity
+is retained while synchronization retries. Signing out requires a connection so revocation can
+be confirmed.
+
+Passwords use salted scrypt hashes. Session tokens are random 256-bit values; SQLite stores only
+their SHA-256 hashes. Native sessions use Expo SecureStore; web sessions use localStorage
+(following [Expo Router's session example](https://docs.expo.dev/router/advanced/authentication/)). This is a local assessment app: use HTTPS,
+replace demo credentials and consider HttpOnly web cookies before public deployment.
+
+The database lives at `packages/api/data/kerf.db` and is created/seeded on first run. Existing
+databases migrate in place, preserving projects, memberships and measurements; old fixed bearer
+tokens stop working. **Settings → Reset demo data & sign everyone out** deletes captured data
+and restores the seed. The API allows this only with `NODE_ENV=development` or `test`;
+`yarn dev:api` enables development explicitly. `yarn workspace @kerf/api start` defaults to
+production and disables reset. Set `DB_PATH` to use a separate SQLite file; set `PORT` to change
+the API port.
+
+### Capture, synchronization and presence
+
+1. Open **Capture measurements**, pick a project/group and enter a label.
+2. Tap the large **Measure** action; the simulated tape logs the reading automatically.
+3. Pending becomes synced after server confirmation. A failed reading has a **Retry** action.
+   Retries reuse an idempotency key, preventing duplicate saves after an ambiguous timeout.
+   Keep Capture open until readings sync: failed/pending readings are held in memory, **not a
+   persistent offline queue**.
+4. The dashboard starts with the latest 20 measurements in your projects, then automatically
+   receives every subsequent authorized measurement, newest ID first. Project screens still
+   offer pull-to-refresh. Reloading the app starts a new recent-20 view; all history remains
+   available in project details and CSV.
+
+Authenticated **long polling** (`GET /sync`) waits up to 20 seconds, returns immediately on a
+measurement or presence change, then reconnects. This deliberately uses ordinary fetch across
+web and Expo Go rather than adding an SSE adapter/parser. SQLite measurement IDs are the durable
+cursor; recovery pages contain up to 200 rows and drain before the dashboard reports Live.
+The initial snapshot and cursor are read synchronously, reconnects resume from the last applied
+cursor, and the client merges by ID to deduplicate replay. An API restart retains the cursor
+history and sessions; a database reset changes an epoch so old feed state is replaced.
+
+Live, reconnecting and disconnected states are explicit. Retries back off from 1 to 10 seconds;
+resuming a native app or a browser online/pageshow event reconnects immediately. Presence is
+tracked per login **and** per app/tab connection, renewed on each poll, deduplicated by user and
+filtered to people sharing a project. Explicit close/background/logout removes leases when
+possible; abandoned leases expire in 45 seconds, with cleanup every 5 seconds. Failed links hide
+potentially stale online names. Backgrounded native apps are considered away.
+
+### Export
+
+From the dashboard, choose **Export all my projects (CSV)**. Desktop browsers download a file;
+Expo Go opens the native file-sharing sheet so you can save or open it in another app. Native
+export cache files remain available for the receiving app; files older than a day are pruned on
+the next export (the OS may also clear its cache). An empty
+export still includes headers. API errors appear beside the action.
+
+The CSV contains Project, Group, Label, **Measurement (mm)**, **Measurement (inches)**,
+**Display measurement**, Captured by, Device, Captured at (UTC), and Measurement ID. Millimeters
+preserve the original stored integer exactly; numeric inches use the unrounded mm/25.4 conversion.
+Use those numeric columns for arithmetic; the display column matches the app's chosen units
+(including its rounded fractional/decimal display). Text is quoted/escaped, spreadsheet formulas
+are neutralized with an apostrophe, and UTF-8 BOM/CRLF support Excel and Sheets. Rows are ordered
+by increasing measurement ID. Exports always join membership on the server.
+
+### API quick check
 
 ```bash
-curl -H "Authorization: Bearer alex-7f3c2a91" http://localhost:4000/projects
+curl http://localhost:4000/health
+curl -X POST http://localhost:4000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Priya","password":"kerf-priya-demo"}'
 ```
 
-The database lives at `packages/api/data/kerf.db` and is created and seeded on first run. To get
-back to the seed data, use **Settings → Reset seed data** in the app, or delete that file.
+Use the returned `token` as `Authorization: Bearer <token>`:
+
+| Request | Behavior |
+| --- | --- |
+| `GET /me` | Current authenticated user |
+| `POST /auth/logout` | Revoke this session and its presence |
+| `GET /projects` | Membership-scoped projects |
+| `GET /projects/:id/measurements` | Groups and readings; inaccessible IDs return 404 |
+| `POST /groups/:id/measurements` | Positive integer mm, label, deviceId; optional clientId for retries |
+| `GET /sync?connectionId=<unique-id>` | Snapshot, epoch, cursor, online users |
+| `GET /sync?connectionId=<unique-id>&after=<cursor>&epoch=<epoch>` | Long-poll recovery; `wait=0` for an immediate response |
+| `DELETE /presence/:connectionId` | Release only this session's connection |
+| `GET /export.csv?unit=metric` | All your projects; display unit also accepts decimal/fractional |
+| `GET /projects/:id/export.csv` | Single authorized project |
+
+Connection/client IDs must contain 16–100 letters, digits or hyphens (UUIDs work). Every route
+except health, login and CORS preflight requires a valid bearer session. Credentials are sent in
+headers, never in URLs. No API key or external account is required.
+
+### Verification and demo
+
+```bash
+yarn typecheck
+yarn lint
+yarn test
+npx expo-doctor
+```
+
+Tests use temporary SQLite files and ephemeral localhost ports. They cover authentication,
+restoration/revocation, project/live/presence/export isolation, API restart and paginated replay,
+idempotent writes, ordering/deduplication, connection cleanup, lease expiry, and CSV escaping,
+formula safety, precision and empty exports. See [NOTES.md](NOTES.md) for verification boundaries
+and [DEMO.md](DEMO.md) for a timed 3–5 minute walkthrough and remaining device checks.
 
 ## Where the product is headed
 
@@ -78,7 +176,7 @@ Crews are starting to share projects, so a superintendent and several subcontrac
 the same job. And a few of our larger customers want their own tools to log measurements straight to
 the API rather than going through the app.
 
-## The task
+## The task (original challenge baseline)
 
 Today there's no sign-in: the app always acts as Alex. The office dashboard only shows new
 measurements when you reload it, nobody can tell who else is around, and there's no way to get
