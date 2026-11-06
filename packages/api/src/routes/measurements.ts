@@ -4,7 +4,7 @@ import { Router } from 'express';
 import type { Db } from '../db';
 import { type MeasurementRow, toMeasurement } from '../rows';
 
-export function measurementsRouter(db: Db) {
+export function measurementsRouter(db: Db, notify: () => void) {
   const router = Router();
 
   const findProjectForUser = db.prepare(`
@@ -27,14 +27,14 @@ export function measurementsRouter(db: Db) {
     WHERE g.id = ? AND pm.user_id = ?
   `);
   const insertMeasurement = db.prepare(`
-    INSERT INTO measurements (group_id, value, label, device_id, created_at, created_by)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO measurements (group_id, value, label, device_id, created_at, created_by, client_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `);
 
   router.get('/projects/:id/measurements', (req, res) => {
     const projectId = Number(req.params.id);
-    if (!findProjectForUser.get(projectId, req.userId)) {
+    if (!Number.isSafeInteger(projectId) || !findProjectForUser.get(projectId, req.userId)) {
       res.status(404).json({ error: 'Project not found' });
       return;
     }
@@ -51,18 +51,39 @@ export function measurementsRouter(db: Db) {
 
   router.post('/groups/:id/measurements', (req, res) => {
     const groupId = Number(req.params.id);
-    if (!findGroupForUser.get(groupId, req.userId)) {
+    if (!Number.isSafeInteger(groupId) || !findGroupForUser.get(groupId, req.userId)) {
       res.status(404).json({ error: 'Group not found' });
       return;
     }
-    const { value, label, deviceId } = req.body ?? {};
-    if (!Number.isInteger(value) || value <= 0) {
+    const { value, label, deviceId, clientId } = req.body ?? {};
+    if (!Number.isSafeInteger(value) || value <= 0) {
       res.status(400).json({ error: 'value must be a positive integer' });
       return;
     }
-    if (typeof label !== 'string' || !label.trim()) {
-      res.status(400).json({ error: 'label is required' });
+    if (typeof label !== 'string' || !label.trim() || label.length > 200) {
+      res.status(400).json({ error: 'Label must contain 1–200 characters.' });
       return;
+    }
+    if (deviceId !== undefined && (typeof deviceId !== 'string' || deviceId.length > 128)) {
+      res.status(400).json({ error: 'Invalid device ID.' });
+      return;
+    }
+    if (clientId !== undefined && (typeof clientId !== 'string' || !/^[a-zA-Z0-9-]{16,100}$/.test(clientId))) {
+      res.status(400).json({ error: 'Invalid measurement request ID.' });
+      return;
+    }
+    if (clientId) {
+      const existing = db.prepare('SELECT * FROM measurements WHERE created_by = ? AND client_id = ?')
+        .get(req.userId, clientId) as unknown as MeasurementRow | undefined;
+      if (existing) {
+        if (existing.group_id !== groupId || existing.value !== value || existing.label !== label.trim() ||
+            existing.device_id !== (deviceId ?? 'unknown')) {
+          res.status(409).json({ error: 'This request ID was already used for a different measurement.' });
+          return;
+        }
+        res.json(toMeasurement(existing));
+        return;
+      }
     }
     const row = insertMeasurement.get(
       groupId,
@@ -71,7 +92,9 @@ export function measurementsRouter(db: Db) {
       typeof deviceId === 'string' ? deviceId : 'unknown',
       Date.now(),
       req.userId,
+      clientId ?? null,
     ) as unknown as MeasurementRow;
+    notify();
     res.status(201).json(toMeasurement(row));
   });
 

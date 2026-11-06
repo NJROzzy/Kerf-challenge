@@ -24,12 +24,14 @@ export function Chips<T extends string | number>({ options, selected, onSelect }
         return (
           <Pressable
             key={option.value}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
             onPress={() => onSelect(option.value)}
             style={[
               styles.chip,
               { backgroundColor: active ? theme.tint : theme.backgroundElement },
             ]}>
-            <ThemedText type="small" style={active ? styles.activeText : undefined}>
+            <ThemedText type="small" style={active ? { color: theme.tintText } : undefined}>
               {option.label}
             </ThemedText>
           </Pressable>
@@ -44,11 +46,10 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   chip: {
+    minHeight: 48,
+    justifyContent: 'center',
     borderRadius: 999,
     paddingVertical: Spacing.one,
     paddingHorizontal: Spacing.three,
-  },
-  activeText: {
-    color: '#ffffff',
   },
 });

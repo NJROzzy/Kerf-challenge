@@ -1,9 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { demoPassword, hashPassword, newToken } from './security';
 
 export const USERS = [
-  { name: 'Alex', token: 'alex-7f3c2a91' },
-  { name: 'Sam', token: 'sam-4b8e10d6' },
-  { name: 'Priya', token: 'priya-2d9e5b07' },
+  { name: 'Alex' },
+  { name: 'Sam' },
+  { name: 'Priya' },
 ];
 
 type SeedGroup = { name: string; readings: [string, number][] };
@@ -129,7 +130,7 @@ const DEVICES = ['TP-3F2A', 'TP-91C4'];
 const DAY = 24 * 60 * 60 * 1000;
 
 export function seed(db: DatabaseSync) {
-  const insertUser = db.prepare('INSERT INTO users (name, token) VALUES (?, ?)');
+  const insertUser = db.prepare('INSERT INTO users (name, token, password_hash) VALUES (?, ?, ?)');
   const insertProject = db.prepare('INSERT INTO projects (name, owner_id) VALUES (?, ?)');
   const insertMember = db.prepare(
     'INSERT INTO project_members (project_id, user_id) VALUES (?, ?)',
@@ -141,7 +142,7 @@ export function seed(db: DatabaseSync) {
   );
 
   for (const user of USERS) {
-    insertUser.run(user.name, user.token);
+    insertUser.run(user.name, newToken(), hashPassword(demoPassword(user.name)));
   }
 
   let createdAt = Date.now() - 14 * DAY;

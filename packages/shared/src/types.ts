@@ -34,10 +34,29 @@ export interface NewMeasurement {
   value: number;
   label: string;
   deviceId: string;
+  clientId?: string;
 }
 
 export interface FeedItem extends Measurement {
   projectId: number;
   projectName: string;
   groupName: string;
+  capturedBy: string;
 }
+
+export interface Session {
+  token: string;
+  expiresAt: number;
+  user: User;
+}
+
+export interface SyncPage {
+  items: FeedItem[];
+  cursor: number;
+  epoch: string;
+  reset: boolean;
+  hasMore: boolean;
+  online: User[];
+}
+
+export type LiveStatus = 'connecting' | 'live' | 'reconnecting' | 'disconnected';

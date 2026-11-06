@@ -22,6 +22,8 @@ export function Button({
   return (
     <Pressable
       {...props}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
@@ -31,7 +33,7 @@ export function Button({
       ]}>
       <ThemedText
         type={size === 'large' ? 'subtitle' : 'smallBold'}
-        style={primary ? styles.primaryText : undefined}>
+        style={primary ? { color: theme.tintText } : undefined}>
         {title}
       </ThemedText>
     </Pressable>
@@ -40,6 +42,8 @@ export function Button({
 
 const styles = StyleSheet.create({
   button: {
+    minHeight: 48,
+    justifyContent: 'center',
     borderRadius: 10,
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.three,
@@ -51,8 +55,5 @@ const styles = StyleSheet.create({
   },
   dimmed: {
     opacity: 0.6,
-  },
-  primaryText: {
-    color: '#ffffff',
   },
 });
